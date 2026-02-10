@@ -229,6 +229,61 @@ async def proxy_upload(request):
         logger.exception("proxy_upload error")
         return web.json_response({'error': str(e)}, status=500)
 
+# ==================== 电源控制 ====================
+
+async def power_action(request):
+    """电源操作: start, stop, restart, kill"""
+    data = await request.json()
+    action = data.get('signal', '')
+    if action not in ['start', 'stop', 'restart', 'kill']:
+        return web.json_response({'error': '无效的操作，支持: start, stop, restart, kill'}, status=400)
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"{get_base_url(request).replace('/files', '')}/power"
+            async with session.post(url, json={'signal': action}, headers=get_headers(request), ssl=False) as resp:
+                if resp.status in [200, 204]:
+                    return web.json_response({'status': 'ok', 'action': action})
+                else:
+                    text = await resp.text()
+                    return web.json_response({'error': text}, status=resp.status)
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
+
+async def get_server_resources(request):
+    """获取服务器资源使用情况"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"{get_base_url(request).replace('/files', '')}/resources"
+            async with session.get(url, headers=get_headers(request), ssl=False) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return web.json_response(data)
+                else:
+                    text = await resp.text()
+                    return web.json_response({'error': text}, status=resp.status)
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
+
+async def send_command(request):
+    """发送控制台命令"""
+    data = await request.json()
+    command = data.get('command', '')
+    if not command:
+        return web.json_response({'error': '命令不能为空'}, status=400)
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"{get_base_url(request).replace('/files', '')}/command"
+            async with session.post(url, json={'command': command}, headers=get_headers(request), ssl=False) as resp:
+                if resp.status in [200, 204]:
+                    return web.json_response({'status': 'ok'})
+                else:
+                    text = await resp.text()
+                    return web.json_response({'error': text}, status=resp.status)
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
+
 async def compress_files(request):
     data = await request.json()
     try:
@@ -270,6 +325,11 @@ app.router.add_post('/api/files/create-folder', create_folder)
 app.router.add_get('/api/files/download', download_file)
 app.router.add_get('/api/files/upload', get_upload_url)
 app.router.add_post('/api/files/upload', proxy_upload)
+
+# 电源控制
+app.router.add_post('/api/power', power_action)
+app.router.add_get('/api/resources', get_server_resources)
+app.router.add_post('/api/command', send_command)
 app.router.add_post('/api/files/compress', compress_files)
 app.router.add_post('/api/files/decompress', decompress_file)
 app.router.add_static('/static/', './static')

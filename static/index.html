@@ -69,6 +69,18 @@
 
         /* 复选框 */
         input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; }
+        
+        /* 服务器控制 */
+        .server-control { background: #16213e; padding: 15px 20px; border-radius: 10px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+        .server-status { display: flex; align-items: center; gap: 20px; }
+        .server-status span { font-size: 14px; }
+        #serverStatus { font-weight: bold; }
+        #serverStatus.running { color: #00c853; }
+        #serverStatus.offline { color: #ff1744; }
+        #serverStatus.starting { color: #ffab00; }
+        #serverStatus.stopping { color: #ffab00; }
+        .power-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+        .power-buttons .btn { padding: 8px 15px; font-size: 13px; }
     </style>
 </head>
 <body>
@@ -92,6 +104,21 @@
                     <input type="password" id="apiKey" placeholder="ptlc_xxxxxx">
                 </div>
                 <button class="btn btn-primary" onclick="saveConfig()">保存配置</button>
+            </div>
+        </div>
+        
+        <!-- 服务器控制 -->
+        <div class="server-control">
+            <div class="server-status">
+                <span id="serverStatus">⚪ 未知</span>
+                <span id="serverResources"></span>
+            </div>
+            <div class="power-buttons">
+                <button class="btn btn-success" onclick="powerAction('start')">▶️ 开机</button>
+                <button class="btn btn-primary" onclick="powerAction('restart')">🔄 重启</button>
+                <button class="btn btn-danger" onclick="powerAction('stop')">⏹️ 关机</button>
+                <button class="btn btn-secondary" onclick="powerAction('kill')">⚠️ 强制终止</button>
+                <button class="btn btn-secondary" onclick="showCommandModal()">💻 控制台</button>
             </div>
         </div>
         
@@ -164,6 +191,21 @@
             </div>
         </div>
     </div>
+    
+    <!-- 控制台模态框 -->
+    <div class="modal" id="commandModal">
+        <div class="modal-content" style="max-width:600px">
+            <div class="modal-header">
+                <h3>💻 发送控制台命令</h3>
+                <button class="close-btn" onclick="closeCommandModal()">&times;</button>
+            </div>
+            <input type="text" id="commandInput" placeholder="输入命令..." style="width:100%;padding:10px;background:#0f0f23;border:1px solid #333;border-radius:5px;color:#fff;margin-bottom:15px" onkeypress="if(event.key==='Enter')sendCommand()">
+            <div style="text-align:right">
+                <button class="btn btn-secondary" onclick="closeCommandModal()">关闭</button>
+                <button class="btn btn-primary" onclick="sendCommand()">发送</button>
+            </div>
+        </div>
+    </div>
 
     <script>
         let currentPath = '/';
@@ -187,6 +229,7 @@
                     document.getElementById('apiKey').value = config.api_key || '';
                     if (config.api_url && config.server_id && config.api_key) {
                         refreshFiles();
+                        getServerStatus();
                     }
                 } catch (e) {
                     console.error(e);
@@ -204,6 +247,7 @@
             localStorage.setItem('ptero_config', JSON.stringify(config));
             showToast('配置已保存到浏览器', 'success');
             refreshFiles();
+            getServerStatus();
         }
         
         // 获取配置
@@ -590,6 +634,112 @@
             document.body.appendChild(toast);
             setTimeout(() => toast.remove(), 3000);
         }
+        
+        // ==================== 服务器控制 ====================
+        
+        // 获取服务器状态
+        async function getServerStatus() {
+            const config = getConfig();
+            if (!config.api_url || !config.server_id || !config.api_key) return;
+            
+            try {
+                const resp = await fetch('/api/resources', { headers: getHeaders() });
+                const data = await resp.json();
+                
+                if (data.attributes) {
+                    const attr = data.attributes;
+                    const state = attr.current_state || 'unknown';
+                    const statusEl = document.getElementById('serverStatus');
+                    const resourcesEl = document.getElementById('serverResources');
+                    
+                    const stateMap = {
+                        'running': '🟢 运行中',
+                        'offline': '🔴 已关机',
+                        'starting': '🟡 启动中',
+                        'stopping': '🟡 关闭中'
+                    };
+                    
+                    statusEl.textContent = stateMap[state] || '⚪ ' + state;
+                    statusEl.className = state;
+                    
+                    // 显示资源
+                    if (attr.resources) {
+                        const r = attr.resources;
+                        const cpuPercent = (r.cpu_absolute || 0).toFixed(1);
+                        const memMB = ((r.memory_bytes || 0) / 1024 / 1024).toFixed(0);
+                        resourcesEl.textContent = `CPU: ${cpuPercent}% | 内存: ${memMB} MB`;
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to get server status:', e);
+            }
+        }
+        
+        // 电源操作
+        async function powerAction(action) {
+            const actionNames = {
+                'start': '开机',
+                'stop': '关机', 
+                'restart': '重启',
+                'kill': '强制终止'
+            };
+            
+            if (action === 'kill' && !confirm('确定要强制终止服务器吗？这可能导致数据丢失！')) return;
+            
+            try {
+                const resp = await fetch('/api/power', {
+                    method: 'POST',
+                    headers: {...getHeaders(), 'Content-Type': 'application/json'},
+                    body: JSON.stringify({ signal: action })
+                });
+                
+                if (resp.ok) {
+                    showToast(`${actionNames[action]}命令已发送`, 'success');
+                    setTimeout(getServerStatus, 2000);
+                } else {
+                    const err = await resp.json();
+                    showToast(`${actionNames[action]}失败: ${err.error}`, 'error');
+                }
+            } catch (e) {
+                showToast(`${actionNames[action]}失败: ${e.message}`, 'error');
+            }
+        }
+        
+        // 控制台命令
+        function showCommandModal() {
+            document.getElementById('commandModal').classList.add('active');
+            document.getElementById('commandInput').focus();
+        }
+        
+        function closeCommandModal() {
+            document.getElementById('commandModal').classList.remove('active');
+        }
+        
+        async function sendCommand() {
+            const command = document.getElementById('commandInput').value.trim();
+            if (!command) return;
+            
+            try {
+                const resp = await fetch('/api/command', {
+                    method: 'POST',
+                    headers: {...getHeaders(), 'Content-Type': 'application/json'},
+                    body: JSON.stringify({ command: command })
+                });
+                
+                if (resp.ok) {
+                    showToast('命令已发送', 'success');
+                    document.getElementById('commandInput').value = '';
+                } else {
+                    const err = await resp.json();
+                    showToast('发送失败: ' + err.error, 'error');
+                }
+            } catch (e) {
+                showToast('发送失败: ' + e.message, 'error');
+            }
+        }
+        
+        // 定时刷新状态
+        setInterval(getServerStatus, 5000);
     </script>
 </body>
 </html>
