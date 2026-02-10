@@ -17,6 +17,9 @@
 
 ## 快速开始
 
+<img width="1167" height="631" alt="image" src="https://github.com/user-attachments/assets/62fc8e97-5bab-40d7-8ccc-90476a70f15d" />
+
+
 ### Docker 运行
 
 ```bash
