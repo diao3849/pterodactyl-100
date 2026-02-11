@@ -4,9 +4,33 @@ import json
 import aiohttp
 from aiohttp import web
 import logging
+from aiohttp_socks import ProxyConnector
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def get_proxy_connector(proxy_url: str):
+    """根据代理URL创建连接器
+    支持格式:
+    - socks5://host:port
+    - socks5://user:pass@host:port
+    - http://host:port
+    """
+    if not proxy_url:
+        return None
+    
+    proxy_url = proxy_url.strip()
+    if proxy_url.startswith(('socks5://', 'socks4://', 'http://', 'https://')):
+        try:
+            return ProxyConnector.from_url(proxy_url)
+        except Exception as e:
+            logger.error(f"Failed to create proxy connector: {e}")
+            return None
+    return None
+
+def get_proxy_url(request):
+    """从请求头获取代理URL"""
+    return request.headers.get('X-Proxy-URL', '').strip()
 
 # CORS 中间件
 @web.middleware
@@ -19,7 +43,7 @@ async def cors_middleware(request, handler):
     
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-API-URL, X-API-Key, X-Server-ID'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-API-URL, X-API-Key, X-Server-ID, X-Proxy-URL'
     return response
 
 def get_headers(request):
@@ -48,8 +72,9 @@ async def list_files(request):
         return web.json_response({'error': '请先配置 API 地址、Server ID 和 API Key'}, status=400)
     
     directory = request.query.get('directory', '/')
+    connector = get_proxy_connector(get_proxy_url(request))
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             url = f"{get_base_url(request)}/list"
             async with session.get(url, params={'directory': directory}, headers=get_headers(request), ssl=False) as resp:
                 text = await resp.text()
@@ -65,6 +90,9 @@ async def list_files(request):
                         err_msg = err_data.get('errors', [{}])[0].get('detail', text[:200])
                     except:
                         err_msg = text[:200]
+                    # 检测 Cloudflare
+                    if 'Just a moment' in text or 'Cloudflare' in text:
+                        err_msg = '检测到 Cloudflare 防护，请配置代理'
                     return web.json_response({'error': f'API 错误 ({resp.status}): {err_msg}'}, status=resp.status)
     except Exception as e:
         logger.exception("list_files error")
@@ -72,8 +100,9 @@ async def list_files(request):
 
 async def get_file_contents(request):
     file_path = request.query.get('file', '')
+    connector = get_proxy_connector(get_proxy_url(request))
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             url = f"{get_base_url(request)}/contents"
             async with session.get(url, params={'file': file_path}, headers=get_headers(request), ssl=False) as resp:
                 if resp.status == 200:
@@ -104,8 +133,9 @@ async def get_file_contents(request):
 async def write_file(request):
     file_path = request.query.get('file', '')
     content = await request.read()  # 读取原始字节
+    connector = get_proxy_connector(get_proxy_url(request))
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             url = f"{get_base_url(request)}/write"
             headers = get_headers(request)
             headers.pop('Content-Type', None)  # 移除 Content-Type
@@ -120,8 +150,9 @@ async def write_file(request):
 
 async def delete_files(request):
     data = await request.json()
+    connector = get_proxy_connector(get_proxy_url(request))
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             url = f"{get_base_url(request)}/delete"
             async with session.post(url, json=data, headers=get_headers(request), ssl=False) as resp:
                 if resp.status in [200, 204]:
@@ -134,8 +165,9 @@ async def delete_files(request):
 
 async def rename_file(request):
     data = await request.json()
+    connector = get_proxy_connector(get_proxy_url(request))
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             url = f"{get_base_url(request)}/rename"
             async with session.put(url, json=data, headers=get_headers(request), ssl=False) as resp:
                 if resp.status in [200, 204]:
@@ -148,8 +180,9 @@ async def rename_file(request):
 
 async def create_folder(request):
     data = await request.json()
+    connector = get_proxy_connector(get_proxy_url(request))
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             url = f"{get_base_url(request)}/create-folder"
             async with session.post(url, json=data, headers=get_headers(request), ssl=False) as resp:
                 if resp.status in [200, 204]:
@@ -162,8 +195,9 @@ async def create_folder(request):
 
 async def download_file(request):
     file_path = request.query.get('file', '')
+    connector = get_proxy_connector(get_proxy_url(request))
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             url = f"{get_base_url(request)}/download"
             async with session.get(url, params={'file': file_path}, headers=get_headers(request), ssl=False) as resp:
                 if resp.status == 200:
@@ -176,8 +210,9 @@ async def download_file(request):
         return web.json_response({'error': str(e)}, status=500)
 
 async def get_upload_url(request):
+    connector = get_proxy_connector(get_proxy_url(request))
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             url = f"{get_base_url(request)}/upload"
             async with session.get(url, headers=get_headers(request), ssl=False) as resp:
                 if resp.status == 200:
@@ -192,9 +227,10 @@ async def get_upload_url(request):
 async def proxy_upload(request):
     """代理上传文件到 Wings 服务器，避免 CORS 问题"""
     directory = request.query.get('directory', '/')
+    connector = get_proxy_connector(get_proxy_url(request))
     try:
         # 先获取上传 URL
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             url = f"{get_base_url(request)}/upload"
             async with session.get(url, headers=get_headers(request), ssl=False) as resp:
                 if resp.status != 200:
@@ -208,7 +244,7 @@ async def proxy_upload(request):
         # 读取上传的文件
         reader = await request.multipart()
         
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             # 创建 FormData
             form = aiohttp.FormData()
             
@@ -238,8 +274,9 @@ async def power_action(request):
     if action not in ['start', 'stop', 'restart', 'kill']:
         return web.json_response({'error': '无效的操作，支持: start, stop, restart, kill'}, status=400)
     
+    connector = get_proxy_connector(get_proxy_url(request))
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             url = f"{get_base_url(request).replace('/files', '')}/power"
             async with session.post(url, json={'signal': action}, headers=get_headers(request), ssl=False) as resp:
                 if resp.status in [200, 204]:
@@ -252,8 +289,9 @@ async def power_action(request):
 
 async def get_server_resources(request):
     """获取服务器资源使用情况"""
+    connector = get_proxy_connector(get_proxy_url(request))
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             url = f"{get_base_url(request).replace('/files', '')}/resources"
             async with session.get(url, headers=get_headers(request), ssl=False) as resp:
                 if resp.status == 200:
@@ -272,8 +310,9 @@ async def send_command(request):
     if not command:
         return web.json_response({'error': '命令不能为空'}, status=400)
     
+    connector = get_proxy_connector(get_proxy_url(request))
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             url = f"{get_base_url(request).replace('/files', '')}/command"
             async with session.post(url, json={'command': command}, headers=get_headers(request), ssl=False) as resp:
                 if resp.status in [200, 204]:
@@ -286,8 +325,9 @@ async def send_command(request):
 
 async def compress_files(request):
     data = await request.json()
+    connector = get_proxy_connector(get_proxy_url(request))
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             url = f"{get_base_url(request)}/compress"
             async with session.post(url, json=data, headers=get_headers(request), ssl=False) as resp:
                 if resp.status in [200, 204]:
@@ -301,8 +341,9 @@ async def compress_files(request):
 
 async def decompress_file(request):
     data = await request.json()
+    connector = get_proxy_connector(get_proxy_url(request))
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             url = f"{get_base_url(request)}/decompress"
             async with session.post(url, json=data, headers=get_headers(request), ssl=False) as resp:
                 if resp.status in [200, 204]:
